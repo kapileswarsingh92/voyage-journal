@@ -197,6 +197,7 @@ scripts/screenshot.js, demo_*.js   Playwright QA / demo-walkthrough tooling
 schema.sql        database schema
 seed.py           demo data loader
 run.py            entry point
+render.yaml       Render Blueprint — one-click deploy config (see below)
 ```
 
 ## Design
@@ -209,19 +210,98 @@ Cover art uses flat mid-century-poster-style illustration (gradients, sun,
 mountains/coast/desert/skyline silhouettes, a postmark-style stamp) generated
 locally with Pillow rather than stock photography.
 
-## Before putting this on the open internet
+## Deploying to Render (Starter + Persistent Disk, ~$7–8/month)
 
-This is a genuine, working app — but a few things are worth doing before a
-real public launch:
+This app is deploy-ready for Render out of the box: `render.yaml` describes
+the whole service, `gunicorn` is in `requirements.txt`, and the database
+path / photo-upload folder are both configurable via environment variables
+(`DATABASE_PATH`, `UPLOAD_FOLDER`) so they can point at a persistent disk
+instead of the app's own folder — necessary because Render's plain
+container filesystem is wiped on every deploy/restart/spin-down, which
+would otherwise erase the database and every uploaded photo. The free plan
+can't attach a persistent disk at all, which is why this needs the paid
+**Starter** plan ($7/month) plus a small **Persistent Disk**
+(~$0.25/GB/month — 1GB is plenty to start).
 
-1. Change the admin password (or create a fresh admin user and remove the
-   seeded one) and set a real `SECRET_KEY` environment variable.
-2. Run it behind a production WSGI server (e.g. `gunicorn run:app`) instead
-   of the Flask dev server.
-3. Consider adding email verification on signup and rate-limiting on
+**1. Push this project to GitHub.** If you don't already have a repo:
+   ```bash
+   cd voyage-journal
+   git init                          # skip if already a git repo
+   git add -A
+   git commit -m "Initial commit"
+   ```
+   Create an empty repo on GitHub (github.com → New repository — don't
+   initialize it with a README), then:
+   ```bash
+   git remote add origin https://github.com/<your-username>/<repo-name>.git
+   git branch -M main
+   git push -u origin main
+   ```
+
+**2. Create a Render account** at [render.com](https://render.com) if you
+   don't have one, and connect your GitHub account when prompted.
+
+**3. Create the service from the Blueprint.** In the Render dashboard:
+   New → Blueprint → select the repo you just pushed. Render reads
+   `render.yaml` from the repo root and pre-fills everything: a Starter
+   web service, a 1GB persistent disk mounted at `/var/data`, the build
+   command (`pip install -r requirements.txt`), the start command
+   (`gunicorn run:app`), and a securely auto-generated `SECRET_KEY`. Review
+   it and click **Apply**.
+
+   (No Blueprint option, or prefer doing it by hand? New → Web Service →
+   pick the repo → set Build Command to `pip install -r requirements.txt`
+   and Start Command to `gunicorn run:app` → choose the **Starter** plan →
+   under **Disks**, add one mounted at `/var/data` with 1GB → under
+   **Environment**, add `SECRET_KEY` (generate a random value),
+   `DATABASE_PATH` = `/var/data/voyage_journal.db`, and `UPLOAD_FOLDER` =
+   `/var/data/uploads`.)
+
+**4. Wait for the first deploy to finish** (a few minutes — watch the
+   Logs tab). The app creates its own database tables automatically on
+   first boot against the empty disk, so the site is live and working as
+   soon as the deploy succeeds — just with no stories in it yet.
+
+**5. Create your admin account.** Sign up for a normal account on the live
+   site (`/account/signup`), then promote it to admin. On Render, open your
+   service → **Shell** tab (available on paid plans) and run:
+   ```bash
+   python3 -c "
+   from app import create_app
+   from app.db import get_db
+   app = create_app()
+   with app.app_context():
+       db = get_db()
+       db.execute(\"UPDATE users SET role='admin' WHERE email=?\", ('you@example.com',))
+       db.commit()
+   "
+   ```
+   (replace the email with the one you signed up with). This is
+   deliberately separate from the demo `seed.py` script, which creates a
+   well-known admin login (`admin@voyagejournal.com` / `AdminDemo123`) —
+   fine for trying the app out, but don't rely on that account for a real
+   public site. If you do run `python3 seed.py` via the Shell to load the
+   demo content as a starting point, change or delete that admin account's
+   password immediately after.
+
+**6. (Optional) Point a custom domain at it** — Render → your service →
+   Settings → Custom Domains, then add the CNAME/A record your domain
+   registrar gives you.
+
+From then on: push to your `main` branch (or ask me to, once I have push
+access to the repo) and Render redeploys automatically — the database and
+every uploaded photo persist across deploys since they live on the
+mounted disk, not in the app's own folder.
+
+## Other things worth doing before a real public launch
+
+1. Consider adding email verification on signup and rate-limiting on
    `/submit` and `/account/login` if it'll be open to the public internet.
-4. Back up `voyage_journal.db` regularly, or move to a hosted Postgres/MySQL
-   database if you expect meaningful traffic.
+2. Back up the database on the persistent disk regularly (Render's Shell
+   can copy `/var/data/voyage_journal.db` out, or move to a hosted
+   Postgres database if you expect meaningful traffic/concurrent writes —
+   SQLite is genuinely fine for a blog at moderate traffic, just not
+   built for many simultaneous writers).
 
 ## A note on how this was built
 
